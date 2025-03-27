@@ -95,7 +95,30 @@ class InstaService {
             console.log("Media container published");
             return response.data;
         } catch (error) {
-            throw new Error(`Media publication failed: ${error.response?.data?.error?.message || error.message}`);
+            console.error('Error response data:', error.response?.data);
+            console.error('Error response status:', error.response?.status);
+            console.error('Error message:', error.message);
+
+            /*
+            TEMPORARY FIX for inconsistent api behaviour
+            error: {
+            message: 'Application request limit reached',
+            type: 'OAuthException',
+            is_transient: false,
+            code: 4,
+            error_subcode: 2207051,
+            error_user_title: 'Action is blocked',
+            error_user_msg: "We restrict certain activity to protect our community. Tell us if you think that we've made a mistake.",
+            fbtrace_id: 'AHMLqDWF2DzE9pOEwYzHPgQ'
+            }
+            The above error is returned, but media container is published
+            */
+            
+            //Wait for sometime and check if media container has been published
+            await new Promise(resolve => setTimeout(resolve, 5000));
+            const container_status = await this._checkContainerStatus(containerID);
+            if(container_status !== "PUBLISHED")
+                throw new Error("Media publication failed");
         }
     }
 
@@ -171,7 +194,7 @@ class InstaService {
             console.log('Photo successfully posted to Instagram');
             return {
                 success: true,
-                postId: publishResult.id,
+                postId: publishResult?.id ?? '',
             };
         } catch (error) {
             console.error('Instagram photo posting error:', error);
@@ -221,27 +244,22 @@ class InstaService {
     }
 
     async _waitForContainerPublishReady(containerId) {
-        const initialDelay = 1000; //1s
-        const maxDelay = 30000; //30s
+        const initialDelay = 5000; //5s
+        const maxDelay = 20000; //20s
         const maxElapsedTime = 300000;  //5min
 
         const startTime = Date.now();
         let currentDelay = initialDelay;
     
         while (Date.now() - startTime < maxElapsedTime) {
-            const response = await axios.get(`${this.baseGraphApiUrl}/${containerId}`,{
-                params: {
-                    fields: "status_code",
-                    access_token: this.accessToken
-                }
-            });
-
+            const status_code = await this._checkContainerStatus(containerId);
+            console.log("status code:", status_code)
             // Ready to publish
-            if (response.data.status_code === 'FINISHED') {
+            if (status_code === 'FINISHED') {
                 return; 
             }
 
-            if (response.data.status_code === 'ERROR') {
+            if (status_code === 'ERROR') {
                 throw new Error(`Container creation failed with error: ${response.data.status}`);
             }
 
@@ -253,6 +271,18 @@ class InstaService {
         }
     
         throw new Error('Max elapsed time reached while waiting for container');
+    }
+
+    async _checkContainerStatus(containerId) {
+        const response = await axios.get(`${this.baseGraphApiUrl}/${containerId}`,{
+            params: {
+                fields: "status_code",
+                access_token: this.accessToken
+            }
+        });
+
+        console.log(`Status of container ${containerId}: ${response.data.status_code}`)
+        return response.data.status_code;
     }
 
     async refreshAccessToken() {

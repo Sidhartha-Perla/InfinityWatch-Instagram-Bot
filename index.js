@@ -250,8 +250,8 @@ async function processAvailablePosts() {
                 console.log("No pending posts available. Will try again in next interval.");
                 break;
             } else if (result === FAILURE) {
-                console.log("Failed to post. Will try again in next interval.");
-                break;
+                console.log("Post might or might not have failed. Review manually.");
+                //break;
             }
             
             num_posts_available--;
@@ -276,12 +276,13 @@ async function postNextPhoto() {
         );
 
         if(result.success){
-            await pq.delete(nextPost.id);
+            await pq.markPosted(nextPost.id);
             console.log(`Successfully posted photo ID: ${nextPost.id}`);
             return SUCCESS;
         }
         else{
             console.log(`An error occurred while trying to process post: ${(nextPost.id)}`);
+            await pq.markReviewRequired(nextPost.id);
             return FAILURE;
         }
     } catch (e) {

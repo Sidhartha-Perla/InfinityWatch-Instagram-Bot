@@ -31,6 +31,12 @@ class PostQueue{
     }
 
     async pushPosts(posts){
+
+        posts = posts.map(post => ({
+            ...post,
+            status : "PENDING"
+        }));
+
         if(!this.db)
             await this.init();
 
@@ -48,6 +54,7 @@ class PostQueue{
         const cursor  = await Rethink
                                 .db(this.dbName)
                                 .table('post_queue')
+                                .filter({status : "PENDING"})
                                 .orderBy({index : 'created_at'})
                                 .limit(1)
                                 .run(this.db);
@@ -57,12 +64,21 @@ class PostQueue{
             return next[0];
     }
 
-    async delete(id){
+    async markPosted(id){
         await Rethink
                 .db(this.dbName)
                 .table('post_queue')
                 .get(id)
-                .delete()
+                .update({status : "POSTED"})
+                .run(this.db);
+    }
+
+    async markReviewRequired(id){
+        await Rethink
+                .db(this.dbName)
+                .table('post_queue')
+                .get(id)
+                .update({status : "REVIEW_REQUIRED"})
                 .run(this.db);
     }
 }
