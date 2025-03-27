@@ -1,4 +1,3 @@
-require("dotenv").config();
 const { IgApiClient } = require('instagram-private-api');
 const axios = require('axios');
 const fs =require('fs');
@@ -119,6 +118,9 @@ class InstaService{
             if(location.longitude > 180 || location.longitude < -180) throw new Error("Longitude must be between -180 to 180");
             const locations = await this.igClient.search.location(location.latitude, location.longitude, 'place');
             loc = locations[0];
+            console.log("photo latitude: ", location.latitude);
+            console.log("photo longitude: ", location.longitude);
+            console.log("photo location retrieved: ", loc);
         }
         
         const hashtags = tags ? tags.map(tag => '#' + tag).join(' ') : "";
