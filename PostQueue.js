@@ -54,8 +54,8 @@ class PostQueue{
         const cursor  = await Rethink
                                 .db(this.dbName)
                                 .table('post_queue')
-                                .filter({status : "PENDING"})
                                 .orderBy({index : 'created_at'})
+                                .filter({status : "PENDING"})
                                 .limit(1)
                                 .run(this.db);
 
