@@ -2,10 +2,10 @@ require("dotenv").config();
 const {processCampaigns} = require('./processCampaigns.js');
 const { CronJob } = require("cron");
 const Rethink = require('rethinkdb');
-const { InstaService } = require("./Insta.js");
 const { CampaignPostingService } = require("./Process.js");
 const { PostQueue } = require("./PostQueue.js");
 const { WitnessChainAdapter } = require("./WitnessChainApiAdapter.js");
+const { InstaService } = require("./InstaOfficial.js");
 
 const dbConfig = {
     host: 'localhost',
@@ -20,8 +20,8 @@ const NO_POSTS_PENDING = 2;
 // bot configuration parameters
 const START_TIME = process.env.START_TIME || '09:00';
 const END_TIME = process.env.END_TIME || '21:00';
-const NUM_POSTS = parseInt(process.env.NUM_POSTS || 24);
-const NUM_FETCHES = parseInt(process.env.NUM_FETCHES || 4);
+const NUM_POSTS = parseInt(process.env.NUM_POSTS || 20);
+const NUM_FETCHES = parseInt(process.env.NUM_FETCHES || 8);
 
 // Instagram client
 let ic = null;
@@ -48,7 +48,13 @@ async function main() {
         await setupDatabase();
         
         // Initialize services
-        ic = await InstaService.create(process.env.IG_USERNAME, process.env.IG_PASSWORD);
+        ic = new InstaService({
+            accessToken : process.env.GRAPH_API_ACCESS_TOKEN, 
+            instagramAccountId : process.env.INSTAGTAM_ACCOUNT_ID,
+            appId : process.env.FACEBOOK_APP_ID,
+            appSecret : process.env.FACEBOOK_APP_SECRET
+        });
+        
         wc = new WitnessChainAdapter(process.env.ETH_PRIVATE_KEY);
         await wc.login();
         
@@ -62,8 +68,44 @@ async function main() {
     }
 }
 
+async function test() {
+    await setupDatabase();
+    wc = new WitnessChainAdapter(process.env.ETH_PRIVATE_KEY);
+    await wc.login();
+    pq = new PostQueue(dbConfig);
+    await pq.init();
+    ic = new InstaService({
+        accessToken : process.env.GRAPH_API_ACCESS_TOKEN, 
+        instagramAccountId : process.env.INSTAGTAM_ACCOUNT_ID
+    });
+
+    //await fetchNewPhotosForCampaigns();
+
+    let nextPost = null;
+    try {
+        nextPost = await pq.nextPost();
+        if (!nextPost) return NO_POSTS_PENDING;
+        
+        const result = await ic.postPhotoToInsta(
+            nextPost.photo_url, 
+            nextPost.caption, 
+            nextPost.tags, 
+            nextPost.location, 
+            nextPost.user_names_to_tag
+        );
+        
+        await pq.delete(nextPost.id);
+        console.log(`Successfully posted photo: ${result.success}`);
+        return SUCCESS;
+    } catch (e) {
+        console.log(`Error ${e} occurred while trying to process post: ${nextPost ? JSON.stringify(nextPost.id) : 'unknown'}`);
+        return FAILURE;
+    }
+}
+
 //execute initialization script
 main();
+//test();
 
 async function setupDatabase() {
     // Initialize db connection
@@ -225,7 +267,7 @@ async function postNextPhoto() {
         nextPost = await pq.nextPost();
         if (!nextPost) return NO_POSTS_PENDING;
         
-        await ic.postPhotoToInsta(
+        const result = await ic.postPhotoToInsta(
             nextPost.photo_url, 
             nextPost.caption, 
             nextPost.tags, 
@@ -233,11 +275,15 @@ async function postNextPhoto() {
             nextPost.user_names_to_tag
         );
 
-        console.log("Photo place according to data fetched: ", nextPost.place);
-        
-        await pq.delete(nextPost.id);
-        console.log(`Successfully posted photo ID: ${nextPost.id}`);
-        return SUCCESS;
+        if(result.success){
+            await pq.delete(nextPost.id);
+            console.log(`Successfully posted photo ID: ${nextPost.id}`);
+            return SUCCESS;
+        }
+        else{
+            console.log(`An error occurred while trying to process post: ${(nextPost.id)}`);
+            return FAILURE;
+        }
     } catch (e) {
         console.log(`Error ${e} occurred while trying to process post: ${nextPost ? JSON.stringify(nextPost.id) : 'unknown'}`);
         return FAILURE;
@@ -271,7 +317,7 @@ async function fetchPhotosForCampaign(campaign) {
     } else {
         lastProcessedDate = new Date();
         lastProcessedDate.setHours(0, 0, 0, 0);
-        lastProcessedDate.setDate(lastProcessedDate.getDate() - 2);
+        lastProcessedDate.setDate(lastProcessedDate.getDate() - 4);
         processedRecord = {id: campaign.id, from: lastProcessedDate, to: lastProcessedDate};
     }
 
