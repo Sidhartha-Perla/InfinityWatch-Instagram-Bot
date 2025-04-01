@@ -21,42 +21,55 @@ class WitnessChainAdapter {
     }
 
     async doPost(api, data){
-        try{
-            const response = await axios.post(`${WitnessChainAdapter.base_api_url}/${api}`, data, {
-                headers: { "Content-Type": "application/json", "Cookie": this.#cookies },
-                timeout: 10000,
-            });
-
-            const all_cookies = response.headers['set-cookie'] ?? [];
-
-            let got_cookies	= "";
-            let update_cookie	= false;
-
-            for (const c of all_cookies)
-            {
-                if (c.startsWith("__"))
-                update_cookie = true;
-
-                got_cookies += c.split(";")[0] + "; ";
+        let attempts = 0;
+        do {
+            try{
+                attempts += 1;
+                const response = await axios.post(`${WitnessChainAdapter.base_api_url}/${api}`, data, {
+                    headers: { "Content-Type": "application/json", "Cookie": this.#cookies },
+                    timeout: 10000,
+                });
+    
+                const all_cookies = response.headers['set-cookie'] ?? [];
+    
+                let got_cookies	= "";
+                let update_cookie	= false;
+    
+                for (const c of all_cookies)
+                {
+                    if (c.startsWith("__"))
+                    update_cookie = true;
+    
+                    got_cookies += c.split(";")[0] + "; ";
+                }
+    
+                if (update_cookie)
+                    this.#cookies = got_cookies;
+                
+                if(response.status === 200){
+                    console.log("\x1b[32mSUCCESS\x1b[0m", api);
+                    if(api === "photo-feed-from-campaign")
+                        console.log("Data returned: ", response.data?.result);
+                    return response.data.result;
+                }
+                if(response.status === 401 && api !== "pre-login" && api !== "login"){
+                    await this.login();
+                }
+                
+                throw new Error(`Error message returned:${response.data?.error?.message || JSON.stringify(response)}`);
             }
-
-            if (update_cookie)
-                this.#cookies = got_cookies;
-            
-            if(response.status === 200){
-                console.log("\x1b[32mSUCCESS\x1b[0m", api);
-                return response.data.result;
+            catch(error){
+                if(error instanceof AxiosError){
+                    console.log("\x1b[31mFAILURE\x1b[0m", api, (error.response?.data || error));
+                    if(error.response.status === 401 && api !== "pre-login" && api !== "login"){
+                        await this.login();
+                    }
+                }
+                else{
+                    console.log(error);
+                }
             }
-            throw new Error(`${response.data.error.message}`);
-        }
-        catch(error){
-            if(error instanceof AxiosError){
-                console.error("\x1b[31mFAILURE\x1b[0m", api, error.response.data);
-            }
-            else{
-                console.error(error);
-            }
-        }
+        } while(attempts < 5)
     }
 
     async login(){
@@ -70,7 +83,6 @@ class WitnessChainAdapter {
         }));
 
         if(!preLoginResult) return false;
-        console.log(preLoginResult.message);
 
         //sign pre-login message
         const signed_message = await this.#Wallet.signMessage(preLoginResult.message);
@@ -97,67 +109,3 @@ class WitnessChainAdapter {
 
 module.exports = {WitnessChainAdapter};
 
-/*
-const BASE_URL = "https://mainnet.witnesschain.com/proof/v1/pol";
-
-const WALLET_ADDRESS = process.env.WALLET_ADDRESS;
-const PRIVATE_KEY = process.env.PRIVATE_KEY;
-async function doPost(api, data) {
-    try {
-        const response = await axios.post(`${BASE_URL}/${api}`, data, {
-            headers: { 'Content-Type': 'application/json' },
-            withCredentials: true
-        });
-        console.log("\x1b[32mSUCCESS\x1b[0m", api, response);
-        
-        return response;
-    } catch (error) {
-        console.error("\x1b[31mFAILURE\x1b[0m", api, error);
-    }
-}
-
-async function sign(message) {
-   
-}
-
-
-export async function login() {
-    try{
-        const address = WALLET_ADDRESS;
-        //pre-login
-        let r = await doPost("pre-login", JSON.stringify({
-            keyType: "ethereum",
-            publicKey: address,
-            clientVersion: "9999999999",
-            walletPublicKey: { ethereum: address },
-            role: "prover",
-            claims: { latitude: 17.563, longitude: 78.454 }
-        }));
-
-        if (!r || !r.data || !r.data.result) return false;
-
-        console.log(r.data.result["message"]);
-        const signature = await sign(r.data.result["message"]);
-        const loginResponse = await doPost("login", JSON.stringify({ signature: signature }));
-        
-        return loginResponse && loginResponse.status === 200;
-    }
-    catch(e){
-        return false;
-    }
-}
-
-export async function getCampaigns() {
-    const response = await doPost("all-campaigns", {message : "fetch campaigns"});
-
-    const campaigns = response.status === 200 ? response.data.result : [];
-
-    console.log(campaigns);
-
-    return campaigns ?? [];
-}
-
-export async function getCampaignFeed(campaign, since){
-    return await doPost("photo-feed-from-campaign", {campaign, since});
-}
-*/

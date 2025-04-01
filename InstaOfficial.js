@@ -10,54 +10,45 @@ class InstaService {
     }
 
     async _createMediaContainer(postParams) {
-        const { 
+        const {
+            media_type = "SINGLE_POST",
             image_url,
             caption, 
             tags = [], 
             location,
             user_names_to_tag,
             mediaContainers,
-            is_carousel_item = false,
-            is_carousel =false
         } = postParams;
-
-        if(!image_url)
-            throw new Error("Image URL is required to create a Media Container")
-
-        //get location id
-        /*
-        let location_id = null;
-        if(location)
-            location_id = await this._getLocationId(location);
-        */
 
         //Data to be passed to '/media' api to create media container
         let mediaData = {};
-        if(!is_carousel){
-            mediaData = {
-                ...mediaData,
-                image_url : image_url,
-                ...(user_names_to_tag ? {user_tags : JSON.stringify(this._formatUserTags(user_names_to_tag))} : {}),
-                is_carousel_item : is_carousel_item,
-                access_token : this.accessToken
-            };
-        }
-        else{
-            mediaData = {
-                ...mediaData,
-                media_type : 'CAROUSEL',
-                children : mediaContainers
-            }
-        }
+        mediaData.access_token = this.accessToken;
 
-        if(!is_carousel_item){
-            mediaData = {
-                ...mediaData,
-                caption : this._formatCaption(caption, tags),
-                //...(location_id ? {location_id} : {}),
-            }
+        if(media_type != "CAROUSEL")
+            if(!image_url) throw new Error("Image URL is required for non-carousel posts");
+        
+        switch(media_type){
+            case "SINGLE_POST":
+                mediaData.image_url = image_url;
+                mediaData.caption = this._formatCaption(caption, tags);
+                if(user_names_to_tag) mediaData.user_tags = JSON.stringify(this._formatUserTags(user_names_to_tag))
+                mediaData.is_carousel_item = false;
+                break;
+            case "CAROUSEL_ITEM":
+                mediaData.image_url = image_url;
+                if(user_names_to_tag) mediaData.user_tags = JSON.stringify(this._formatUserTags(user_names_to_tag))
+                mediaData.is_carousel_item = true;
+                break;
+            case "CAROUSEL":
+                mediaData.caption = this._formatCaption(caption, tags);
+                mediaData.children = mediaContainers;
+                break;
+            case "STORIES":
+                mediaData.image_url = image_url;
+                mediaData.media_type = media_type;
+                break;
+            
         }
-
         // Create media container
         try {
             const response = await axios.post(
@@ -98,28 +89,50 @@ class InstaService {
             console.error('Error response data:', error.response?.data);
             console.error('Error response status:', error.response?.status);
             console.error('Error message:', error.message);
-
-            /*
-            TEMPORARY FIX for inconsistent api behaviour
-            error: {
-            message: 'Application request limit reached',
-            type: 'OAuthException',
-            is_transient: false,
-            code: 4,
-            error_subcode: 2207051,
-            error_user_title: 'Action is blocked',
-            error_user_msg: "We restrict certain activity to protect our community. Tell us if you think that we've made a mistake.",
-            fbtrace_id: 'AHMLqDWF2DzE9pOEwYzHPgQ'
-            }
-            The above error is returned, but media container is published
-            */
-            
-            //Wait for sometime and check if media container has been published
-            await new Promise(resolve => setTimeout(resolve, 5000));
-            const container_status = await this._checkContainerStatus(containerID);
-            if(container_status !== "PUBLISHED")
-                throw new Error("Media publication failed");
+            throw new Error("Media publication failed");  
         }
+    }
+
+    async _waitForContainerPublishReady(containerId) {
+        const initialDelay = 5000; //5s
+        const maxDelay = 20000; //20s
+        const maxElapsedTime = 300000;  //5min
+
+        const startTime = Date.now();
+        let currentDelay = initialDelay;
+    
+        while (Date.now() - startTime < maxElapsedTime) {
+            const status_code = await this._checkContainerStatus(containerId);
+            console.log("status code:", status_code)
+            // Ready to publish
+            if (status_code === 'FINISHED') {
+                return; 
+            }
+
+            if (status_code === 'ERROR') {
+                throw new Error(`Container creation failed with error: ${response.data.status}`);
+            }
+
+            // Wait before next attempt
+            await new Promise(resolve => setTimeout(resolve, currentDelay));
+
+            // Increase delay
+            currentDelay = Math.min(currentDelay * 2, maxDelay);
+        }
+    
+        throw new Error('Max elapsed time reached while waiting for container');
+    }
+
+    async _checkContainerStatus(containerId) {
+        const response = await axios.get(`${this.baseGraphApiUrl}/${containerId}`,{
+            params: {
+                fields: "status_code",
+                access_token: this.accessToken
+            }
+        });
+
+        console.log(`Status of container ${containerId}: ${response.data.status_code}`)
+        return response.data.status_code;
     }
 
     //Get location id from latitude, longitude
@@ -184,7 +197,7 @@ class InstaService {
             }
 
             // Create media container
-            const containerID = await this._createMediaContainer({image_url, caption, tags, location, user_names_to_tag, is_carousel_item : false});
+            const containerID = await this._createMediaContainer({image_url, caption, tags, location, user_names_to_tag, media_type : "SINGLE_POST"});
 
             await this._waitForContainerPublishReady(containerID);
 
@@ -215,13 +228,13 @@ class InstaService {
                 let containerId = await this._createMediaContainer({
                     image_url : post.image_url,
                     user_names_to_tag : post.user_names_to_tag,
-                    is_carousel_item : true
+                    media_type : "CAROUSEL_ITEM"
                 })
 
                 mediaContainers.push(containerId);
             }
             //Create container for the Carousel post
-            const carouselContainerID = await this._createMediaContainer({mediaContainers, caption, location, is_carousel : true});
+            const carouselContainerID = await this._createMediaContainer({mediaContainers, caption, location, media_type : "CAROUSEL"});
 
             //Wait until the Carousel is ready to publish
             await this._waitForContainerPublishReady(carouselContainerID);
@@ -243,46 +256,29 @@ class InstaService {
         }
     }
 
-    async _waitForContainerPublishReady(containerId) {
-        const initialDelay = 5000; //5s
-        const maxDelay = 20000; //20s
-        const maxElapsedTime = 300000;  //5min
-
-        const startTime = Date.now();
-        let currentDelay = initialDelay;
-    
-        while (Date.now() - startTime < maxElapsedTime) {
-            const status_code = await this._checkContainerStatus(containerId);
-            console.log("status code:", status_code)
-            // Ready to publish
-            if (status_code === 'FINISHED') {
-                return; 
-            }
-
-            if (status_code === 'ERROR') {
-                throw new Error(`Container creation failed with error: ${response.data.status}`);
-            }
-
-            // Wait before next attempt
-            await new Promise(resolve => setTimeout(resolve, currentDelay));
-
-            // Increase delay
-            currentDelay = Math.min(currentDelay * 2, maxDelay);
+    async postStoryToInsta(image_url) {
+        try {
+            // Create the story container
+            const containerID = await this._createMediaContainer({image_url, media_type : "STORIES"});
+            
+            // Wait for container to be ready
+            await this._waitForContainerPublishReady(containerID);
+            
+            // Publish the story
+            const publishResult = await this._publishMediaContainer(containerID);
+            
+            console.log('Story successfully posted to Instagram');
+            return {
+                success: true,
+                storyId: publishResult?.id ?? ''
+            };
+        } catch (error) {
+            console.error('Instagram story posting error:', error);
+            return {
+                success: false,
+                error: error.message
+            };
         }
-    
-        throw new Error('Max elapsed time reached while waiting for container');
-    }
-
-    async _checkContainerStatus(containerId) {
-        const response = await axios.get(`${this.baseGraphApiUrl}/${containerId}`,{
-            params: {
-                fields: "status_code",
-                access_token: this.accessToken
-            }
-        });
-
-        console.log(`Status of container ${containerId}: ${response.data.status_code}`)
-        return response.data.status_code;
     }
 
     async refreshAccessToken() {

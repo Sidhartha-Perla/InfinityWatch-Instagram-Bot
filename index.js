@@ -18,8 +18,8 @@ const FAILURE = 0;
 const NO_POSTS_PENDING = 2;
 
 // bot configuration parameters
-const START_TIME = process.env.START_TIME || '09:00';
-const END_TIME = process.env.END_TIME || '21:00';
+const START_TIME = process.env.START_TIME || '08:00';
+const END_TIME = process.env.END_TIME || '22:00';
 const NUM_POSTS = parseInt(process.env.NUM_POSTS || 20);
 const NUM_FETCHES = parseInt(process.env.NUM_FETCHES || 8);
 
@@ -315,7 +315,8 @@ async function fetchPhotosForCampaign(campaign) {
     let lastProcessedDate;
     if (processedRecord) {
         lastProcessedDate = new Date(processedRecord.date ? processedRecord.date.toISOString() : processedRecord.to);
-    } else {
+    }
+    else {
         lastProcessedDate = new Date();
         lastProcessedDate.setHours(0, 0, 0, 0);
         lastProcessedDate.setDate(lastProcessedDate.getDate() - 4);
@@ -338,7 +339,7 @@ async function fetchPhotosForCampaign(campaign) {
                 feedRequestSize
             );
             
-            if (photos.length === 0) {
+            if (!photos || photos.length === 0) {
                 hasMorePhotos = false;
                 break;
             }
