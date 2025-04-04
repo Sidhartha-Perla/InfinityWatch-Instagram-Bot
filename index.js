@@ -6,6 +6,7 @@ const { CampaignPostingService } = require("./Process.js");
 const { PostQueue } = require("./PostQueue.js");
 const { WitnessChainAdapter } = require("./WitnessChainApiAdapter.js");
 const { InstaService } = require("./InstaOfficial.js");
+const { createAndUploadCollage } = require("./collage.js");
 
 const dbConfig = {
     host: 'localhost',
@@ -17,11 +18,14 @@ const SUCCESS = 1;
 const FAILURE = 0;
 const NO_POSTS_PENDING = 2;
 
+const ACCEPTED_COLLAGE_SIZES = [6, 9];
+
 // bot configuration parameters
 const START_TIME = process.env.START_TIME || '08:00';
 const END_TIME = process.env.END_TIME || '22:00';
 const NUM_POSTS = parseInt(process.env.NUM_POSTS || 20);
 const NUM_FETCHES = parseInt(process.env.NUM_FETCHES || 8);
+const DEFAULT_FETCH_DAYS = 1;
 
 // Instagram client
 let ic = null;
@@ -69,38 +73,24 @@ async function main() {
 }
 
 async function test() {
+
     await setupDatabase();
-    wc = new WitnessChainAdapter(process.env.ETH_PRIVATE_KEY);
-    await wc.login();
-    pq = new PostQueue(dbConfig);
-    await pq.init();
+
     ic = new InstaService({
         accessToken : process.env.GRAPH_API_ACCESS_TOKEN, 
-        instagramAccountId : process.env.INSTAGTAM_ACCOUNT_ID
+        instagramAccountId : process.env.INSTAGTAM_ACCOUNT_ID,
+        appId : process.env.FACEBOOK_APP_ID,
+        appSecret : process.env.FACEBOOK_APP_SECRET
     });
+    
+    wc = new WitnessChainAdapter(process.env.ETH_PRIVATE_KEY);
+    await wc.login();
+    
+    pq = new PostQueue(dbConfig);
+    await pq.init();
 
-    //await fetchNewPhotosForCampaigns();
-
-    let nextPost = null;
-    try {
-        nextPost = await pq.nextPost();
-        if (!nextPost) return NO_POSTS_PENDING;
-        
-        const result = await ic.postPhotoToInsta(
-            nextPost.photo_url, 
-            nextPost.caption, 
-            nextPost.tags, 
-            nextPost.location, 
-            nextPost.user_names_to_tag
-        );
-        
-        await pq.delete(nextPost.id);
-        console.log(`Successfully posted photo: ${result.success}`);
-        return SUCCESS;
-    } catch (e) {
-        console.log(`Error ${e} occurred while trying to process post: ${nextPost ? JSON.stringify(nextPost.id) : 'unknown'}`);
-        return FAILURE;
-    }
+    await createCampaignStories({id : "WitnessNature"});
+    
 }
 
 //execute initialization script
@@ -244,7 +234,7 @@ function end() {
 async function processAvailablePosts() {
     try {
         while (num_posts_available > 0) {
-            const result = await postNextPhoto();
+            const result = await postNext();
             
             if (result === NO_POSTS_PENDING) {
                 console.log("No pending posts available. Will try again in next interval.");
@@ -261,32 +251,41 @@ async function processAvailablePosts() {
     }
 }
 
-async function postNextPhoto() {
+async function postNext(type = "post") {
     let nextPost = null;
     try {
-        nextPost = await pq.nextPost();
+        nextPost = await pq.nextPost(type);
         if (!nextPost) return NO_POSTS_PENDING;
         
-        const result = await ic.postPhotoToInsta(
-            nextPost.photo_url, 
-            nextPost.caption, 
-            nextPost.tags, 
-            nextPost.location, 
-            nextPost.user_names_to_tag
-        );
+        let result;
+        if(type === "post"){
+            result = await ic.postPhotoToInsta(
+                nextPost.photo_url, 
+                nextPost.caption, 
+                nextPost.tags, 
+                nextPost.location, 
+                nextPost.user_names_to_tag
+            );
+        }
+        else if(type === "story"){
+            result = await ic.postStoryToInsta(nextPost.image_url)
+        }
+        else{
+            throw new Error("Invalid upload Type passed to 'postNext'");
+        }
 
-        if(result.success){
-            await pq.markPosted(nextPost.id);
-            console.log(`Successfully posted photo ID: ${nextPost.id}`);
+        if(result?.success){
+            await pq.markPosted(nextPost.id, type);
+            console.log(`Successfully posted photo ID: ${nextPost.id} as a ${type}`);
             return SUCCESS;
         }
         else{
-            console.log(`An error occurred while trying to process post: ${(nextPost.id)}`);
-            await pq.markReviewRequired(nextPost.id);
+            console.log(`An error occurred while trying to process ${type}: ${(nextPost.id)}`);
+            await pq.markReviewRequired(nextPost.id, type);
             return FAILURE;
         }
     } catch (e) {
-        console.log(`Error ${e} occurred while trying to process post: ${nextPost ? JSON.stringify(nextPost.id) : 'unknown'}`);
+        console.log(`Error ${e} occurred while trying to process ${type}: ${nextPost ? JSON.stringify(nextPost.id) : 'unknown'}`);
         return FAILURE;
     }
 }
@@ -319,7 +318,7 @@ async function fetchPhotosForCampaign(campaign) {
     else {
         lastProcessedDate = new Date();
         lastProcessedDate.setHours(0, 0, 0, 0);
-        lastProcessedDate.setDate(lastProcessedDate.getDate() - 4);
+        lastProcessedDate.setDate(lastProcessedDate.getDate() - DEFAULT_FETCH_DAYS);
         processedRecord = {id: campaign.id, from: lastProcessedDate, to: lastProcessedDate};
     }
 
@@ -360,7 +359,7 @@ async function fetchPhotosForCampaign(campaign) {
                 const user_names_to_tag = ["witnesschain"];
                 return {
                     id: photo.id,
-                    created_at: photo.created_at,
+                    created_at: Rethink.ISO8601(photo.created_at),
                     photo_url: photo.photo_url,
                     caption: campaign.description,
                     tags: photo.tags,
@@ -370,6 +369,7 @@ async function fetchPhotosForCampaign(campaign) {
                     },
                     place: photo.place,
                     user_names_to_tag: user_names_to_tag,
+                    campaign_id : campaign.id
                 };
             });
             
@@ -400,3 +400,31 @@ async function fetchPhotosForCampaign(campaign) {
         console.log(`Updated processed_until for campaign ${campaign.id} to ${latestPhotoDate}`);
     }
 }
+
+async function createCampaignStories(campaign){
+    const postedPhotos = await pq.getPosted(campaign.id);
+    
+    const photos = postedPhotos.map(post => ({image_url : post.photo_url, id : post.id}));
+    console.log("posted photos obtained: ", photos);
+    const stories = [];
+
+    let num_processed = 0;
+    while(photos.length - num_processed >= 9){
+        //Get the next batch of campaign photos and create a collage
+        const nextBatch = photos.slice(num_processed, num_processed + 9);
+        console.log("Next batch:", nextBatch);
+        const collage_url = await createAndUploadCollage(nextBatch.map(item => item.image_url));
+        //Add the story data into stories array
+        const story = {image_url : collage_url, created_at : Rethink.now()};
+        stories.push(story);
+        //Mark photo as included in a story
+        nextBatch.forEach(item => pq.markIncludedInStory(item.id));
+        num_processed += 9;
+    }
+
+    //push story posts to db
+    pq.pushPosts(stories, "story");
+
+    console.log(`Created stories for ${campaign.id}`);
+}
+

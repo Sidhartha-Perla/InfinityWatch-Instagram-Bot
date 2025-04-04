@@ -10,13 +10,15 @@
   "license": "ISC",
   "description": "",
   "dependencies": {
-    "axios": "^1.8.3",
+    "axios": "^1.8.4",
     "axios-cookiejar-support": "^4.0.4",
     "cron": "^4.1.0",
     "dotenv": "^16.4.7",
     "ethers": "^6.13.5",
     "express": "^4.21.2",
+    "form-data": "^4.0.2",
     "instagram-private-api": "^1.46.1",
-    "rethinkdb": "^2.4.2"
+    "rethinkdb": "^2.4.2",
+    "sharp": "^0.33.5"
   }
 }
