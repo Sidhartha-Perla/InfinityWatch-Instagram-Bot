@@ -24,6 +24,7 @@ const ACCEPTED_COLLAGE_SIZES = [6, 9];
 const START_TIME = process.env.START_TIME || '08:00';
 const END_TIME = process.env.END_TIME || '22:00';
 const NUM_POSTS = parseInt(process.env.NUM_POSTS || 20);
+const MAX_STORIES = parseInt(process.env.MAX_STORIES || 5)
 const NUM_FETCHES = parseInt(process.env.NUM_FETCHES || 8);
 const DEFAULT_FETCH_DAYS = 1;
 
@@ -38,7 +39,8 @@ let wc = null;
 const feedRequestSize = 50;
 
 // Counter for posts that should be published
-let num_posts_available = 0;
+let num_posts_allowed = 0;
+let num_stories_allowed = 0;
 
 // Job handles
 let postingJob = null;
@@ -199,6 +201,9 @@ async function start() {
             console.log(`Fetch interval triggered at ${new Date().toISOString()}`);
             await fetchNewPhotosForCampaigns();
         }, null, true);
+
+        //Create stories based on available posted images
+        await createStoriesForCampaigns();
         
         // Initial fetch
         await fetchNewPhotosForCampaigns();
@@ -238,7 +243,6 @@ async function processAvailablePosts() {
             
             if (result === NO_POSTS_PENDING) {
                 console.log("No pending posts available. Will try again in next interval.");
-                break;
             } else if (result === FAILURE) {
                 console.log("Post might or might not have failed. Review manually.");
                 //break;
@@ -401,30 +405,47 @@ async function fetchPhotosForCampaign(campaign) {
     }
 }
 
-async function createCampaignStories(campaign){
-    const postedPhotos = await pq.getPosted(campaign.id);
-    
-    const photos = postedPhotos.map(post => ({image_url : post.photo_url, id : post.id}));
-    console.log("posted photos obtained: ", photos);
-    const stories = [];
+async function createStoriesForCampaigns(){
+    try {
+        const campaigns = await wc.getCampaigns();
 
-    let num_processed = 0;
-    while(photos.length - num_processed >= 9){
-        //Get the next batch of campaign photos and create a collage
-        const nextBatch = photos.slice(num_processed, num_processed + 9);
-        console.log("Next batch:", nextBatch);
-        const collage_url = await createAndUploadCollage(nextBatch.map(item => item.image_url));
-        //Add the story data into stories array
-        const story = {image_url : collage_url, created_at : Rethink.now()};
-        stories.push(story);
-        //Mark photo as included in a story
-        nextBatch.forEach(item => pq.markIncludedInStory(item.id));
-        num_processed += 9;
+        for (const campaign of campaigns) {
+            await createCampaignStories(campaign);
+        }
+    } catch (e) {
+        console.log(`Error ${e} occurred while trying to create stories for campaigns`);
     }
+}
 
-    //push story posts to db
-    pq.pushPosts(stories, "story");
+async function createCampaignStories(campaign){
+    try {
+        const postedPhotos = await pq.getPosted(campaign.id);
+    
+        const photos = postedPhotos.map(post => ({image_url : post.photo_url, id : post.id}));
+        console.log("posted photos obtained: ", photos);
+        const stories = [];
 
-    console.log(`Created stories for ${campaign.id}`);
+        let num_processed = 0;
+        while(photos.length - num_processed >= 9){
+            //Get the next batch of campaign photos and create a collage
+            const nextBatch = photos.slice(num_processed, num_processed + 9);
+            console.log("Next batch:", nextBatch);
+            const collage_url = await createAndUploadCollage(nextBatch.map(item => item.image_url));
+            //Add the story data into stories array
+            const story = {image_url : collage_url, created_at : Rethink.now()};
+            stories.push(story);
+            //Mark photo as included in a story
+            nextBatch.forEach(item => pq.markIncludedInStory(item.id));
+            num_processed += 9;
+        }
+
+        //push story posts to db
+        pq.pushPosts(stories, "story");
+
+        console.log(`Created stories for ${campaign.id}`);
+    }
+    catch(e){
+        console.log(`Error ${e} occured while trying to create stories for campaign: ${campaign}`);
+    }
 }
 

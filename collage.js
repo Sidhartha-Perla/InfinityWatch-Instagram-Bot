@@ -103,7 +103,7 @@ async function createAndUploadCollage(imageUrls, options = {}) {
 module.exports = {createAndUploadCollage};
 
 
-/*
+
 const imageUrls = [
   'https://truesnap.s3.amazonaws.com/129615-097ef1f319c3ff8d065ee46b3a54047d661ac8e4b63075416d3a402ff157462c.jpg',
   'https://truesnap.s3.amazonaws.com/338280-edb8ff57b31a741b95a4e6b1c4151b5c8cc219fb69756ca91505448f111be8e4.jpg',
@@ -126,9 +126,8 @@ const options = {
 
 createAndUploadCollage(imageUrls, options)
   .then(response => {
-    console.log('ImgBB URL:', response.data.url);
+    console.log('ImgBB URL:', response);
   })
   .catch(err => {
     console.error('Failed to create and upload collage:', err);
   });
-*/
