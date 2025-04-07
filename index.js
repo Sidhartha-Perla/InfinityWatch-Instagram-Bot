@@ -1,8 +1,6 @@
 require("dotenv").config();
-const {processCampaigns} = require('./processCampaigns.js');
 const { CronJob } = require("cron");
 const Rethink = require('rethinkdb');
-const { CampaignPostingService } = require("./Process.js");
 const { PostQueue } = require("./PostQueue.js");
 const { WitnessChainAdapter } = require("./WitnessChainApiAdapter.js");
 const { InstaService } = require("./InstaOfficial.js");
