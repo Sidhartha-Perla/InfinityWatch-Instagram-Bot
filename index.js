@@ -16,52 +16,66 @@ const SUCCESS = 1;
 const FAILURE = 0;
 const NO_POSTS_PENDING = 2;
 
-const ACCEPTED_COLLAGE_SIZES = [6, 9];
 
-// bot configuration parameters
+//bot configuration parameters
 const START_TIME = process.env.START_TIME || '08:00';
 const END_TIME = process.env.END_TIME || '22:00';
-const NUM_POSTS = parseInt(process.env.NUM_POSTS || 20);
-const MAX_STORIES = parseInt(process.env.MAX_STORIES || 5)
+//Maximum number of total posts
+const MAX_POSTS = parseInt(process.env.MAX_POSTS || 20);
+//Maximum number of stories
+const MAX_STORIES = parseInt(process.env.MAX_STORIES || 5);
+//Number of campaign photo fetches
 const NUM_FETCHES = parseInt(process.env.NUM_FETCHES || 8);
+//Number of previous days to consider if no record of campaign in process_period table
 const DEFAULT_FETCH_DAYS = 1;
+//Gap between consecutive posts in the same interval
+const POST_GAP_MINUTES = 10; 
+//Max number of posts in a posting interval
+//Must be less that posting interval/POST_GAP_MINUTES
+const MAX_POSTS_IN_INTERVAL = 2;
 
-// Instagram client
+//Instagram graph API client
 let ic = null;
-// Post queue
+//Post queue
 let pq = null;
-// db connection
+//db connection
 let db = null;
-// Witnesschain API adapter
+//Witnesschain API adapter
 let wc = null;
 const feedRequestSize = 50;
 
-// Counter for posts that should be published
+//Check variables
 let num_posts_allowed = 0;
-let num_stories_allowed = 0;
+let num_stories_posted = 0;
+let next_post_type = "story";
 
-// Job handles
+//Cron jobs
 let postingJob = null;
 let fetchingJob = null;
 let startJob = null;
 let endJob = null;
 
-async function main() {
+//Flags
+let isPosting = false;
+let isFetching = false;
+
+async function main(){
     try {
         // Setup database connection
         await setupDatabase();
         
         // Initialize services
+
         ic = new InstaService({
             accessToken : process.env.GRAPH_API_ACCESS_TOKEN, 
-            instagramAccountId : process.env.INSTAGTAM_ACCOUNT_ID,
+            instagramAccountId : process.env.INSTAGRAM_ACCOUNT_ID,
             appId : process.env.FACEBOOK_APP_ID,
             appSecret : process.env.FACEBOOK_APP_SECRET
         });
-        
+
         wc = new WitnessChainAdapter(process.env.ETH_PRIVATE_KEY);
         await wc.login();
-        
+
         pq = new PostQueue(dbConfig);
         await pq.init();
         
@@ -72,13 +86,12 @@ async function main() {
     }
 }
 
-async function test() {
-
+async function test(){
     await setupDatabase();
 
     ic = new InstaService({
         accessToken : process.env.GRAPH_API_ACCESS_TOKEN, 
-        instagramAccountId : process.env.INSTAGTAM_ACCOUNT_ID,
+        instagramAccountId : process.env.INSTAGRAM_ACCOUNT_ID,
         appId : process.env.FACEBOOK_APP_ID,
         appSecret : process.env.FACEBOOK_APP_SECRET
     });
@@ -89,25 +102,22 @@ async function test() {
     pq = new PostQueue(dbConfig);
     await pq.init();
 
-    await createCampaignStories({id : "WitnessNature"});
-    
+    await postNext("story");
 }
 
-//execute initialization script
+//execute
 main();
 //test();
 
 async function setupDatabase() {
-    // Initialize db connection
     db = await Rethink.connect(dbConfig);
     
-    // Check if 'processed_period' table exists
     const tables = await Rethink
                         .db(dbConfig.db)
                         .tableList()
                         .run(db);
                         
-    // Create if doesn't exist
+    // Create table if it doesn't exist
     if (!tables.includes('processed_period')) {
         await Rethink
             .db(dbConfig.db)
@@ -117,58 +127,60 @@ async function setupDatabase() {
 }
 
 function setupCronJobs() {
-    // Parse start and end times
+    //Start and End times of Operation
     const [startHour, startMinute] = START_TIME.split(':').map(Number);
     const [endHour, endMinute] = END_TIME.split(':').map(Number);
     
-    // Calculate the posting interval (in minutes)
+    //posting interval
     const startTimeMinutes = startHour * 60 + startMinute;
     const endTimeMinutes = endHour * 60 + endMinute;
     const operationalMinutes = endTimeMinutes - startTimeMinutes;
     
-    // Calculate minutes between posts
-    const postingIntervalMinutes = Math.floor(operationalMinutes / NUM_POSTS);
+    //time between posts
+    const postingIntervalMinutes = Math.floor(operationalMinutes / MAX_POSTS);
     
-    // Calculate fetch interval (in minutes)
+    //fetch interval
     const fetchIntervalMinutes = Math.floor(operationalMinutes / NUM_FETCHES);
     
     console.log(`Bot operational from ${START_TIME} to ${END_TIME}`);
-    console.log(`Posting ${NUM_POSTS} times per day with interval of ${postingIntervalMinutes} minutes`);
-    console.log(`Fetching ${NUM_FETCHES} times per day with interval of ${fetchIntervalMinutes} minutes`);
+    console.log(`Posting ${MAX_POSTS} times per day with interval of ${postingIntervalMinutes} minutes`);
+    console.log(`Maximum ${MAX_STORIES} stories allowed per day`);
+    console.log(`Fetching ${NUM_FETCHES} times per day with an interval of ${fetchIntervalMinutes} minutes`);
     
-    // Daily start job
+    //Start job
     startJob = new CronJob(`0 ${startMinute} ${startHour} * * *`, () => {
         start();
     }, null, true);
     
-    // Daily end job
+    //End job
     endJob = new CronJob(`0 ${endMinute} ${endHour} * * *`, () => {
         end();
     }, null, true);
     
-    // Start immediately if within operational hours
+    //Start immediately if within operational time
     const now = new Date();
     const currentHour = now.getHours();
     const currentMinute = now.getMinutes();
     const currentTimeMinutes = currentHour * 60 + currentMinute;
     
     if (currentTimeMinutes >= startTimeMinutes && currentTimeMinutes < endTimeMinutes) {
-        console.log("Current time is within operational hours. Starting immediately...");
+        console.log("Current time is within operational hours. Starting immediately!");
         start();
     } else {
         console.log(`Current time is outside operational hours. Will start at ${START_TIME}`);
     }
 }
 
-// Start daily operations
+//Start operations
 async function start() {
     try {
-        console.log(`Starting daily operations at ${new Date().toISOString()}`);
+        console.log(`Starting operations at ${new Date().toISOString()}`);
         
-        // Reset counter
-        num_posts_available = 0;
+        //Reset counters
+        num_posts_allowed = 0;
+        num_stories_posted = 0;
         
-        // Calculate intervals for posting and fetching
+        //Intervals for posting and fetching
         const [startHour, startMinute] = START_TIME.split(':').map(Number);
         const [endHour, endMinute] = END_TIME.split(':').map(Number);
         
@@ -176,79 +188,142 @@ async function start() {
         const endTimeMinutes = endHour * 60 + endMinute;
         const operationalMinutes = endTimeMinutes - startTimeMinutes;
         
-        const postingIntervalMinutes = Math.floor(operationalMinutes / NUM_POSTS);
+        const postingIntervalMinutes = Math.floor(operationalMinutes / MAX_POSTS);
         const fetchIntervalMinutes = Math.floor(operationalMinutes / NUM_FETCHES);
         
-        // Setup posting job
-        if (postingJob) {
+        //Setup posting job
+        if(postingJob){
             postingJob.stop();
         }
         
         postingJob = new CronJob(`0 */${postingIntervalMinutes} * * * *`, async () => {
             console.log(`Posting interval triggered at ${new Date().toISOString()}`);
-            num_posts_available++;
+            num_posts_allowed++;
+            if(isPosting)
+                return;
+            isPosting = true;
             await processAvailablePosts();
+            isPosting = false;
         }, null, true);
         
-        // Setup fetching job
-        if (fetchingJob) {
+        //Setup fetching job
+        if(fetchingJob){
             fetchingJob.stop();
         }
         
         fetchingJob = new CronJob(`0 */${fetchIntervalMinutes} * * * *`, async () => {
             console.log(`Fetch interval triggered at ${new Date().toISOString()}`);
+            if(isFetching)
+                return;
+            isFetching = true;
             await fetchNewPhotosForCampaigns();
+            isFetching = false;
         }, null, true);
 
-        //Create stories based on available posted images
+        //Create stories for each campaign based on available posted images
         await createStoriesForCampaigns();
         
-        // Initial fetch
+        //Initial fetch
+        isFetching = true;
         await fetchNewPhotosForCampaigns();
-        
-        // Initial post
-        num_posts_available++;
+        isFetching =false;
+
+        //Initial post
+        num_posts_allowed++;
+        isPosting = true;
         await processAvailablePosts();
-    } catch (error) {
+        isPosting = false;
+    } 
+    catch (error){
         console.error(`Error in start: ${error}`);
     }
 }
 
-// End daily operations
-function end() {
+//End daily operations
+async function end() {
     console.log(`Ending daily operations at ${new Date().toISOString()}`);
     
-    // Stop the interval jobs
-    if (postingJob) {
+    //Stop posting and fetching cron jobs
+    if (postingJob) 
         postingJob.stop();
-        postingJob = null;
-    }
-    
-    if (fetchingJob) {
+    if (fetchingJob) 
         fetchingJob.stop();
+
+    const waitForPosting = (async () => {
+        while (isPosting) {
+            await new Promise(res => setTimeout(res, 100));
+        }
+        postingJob = null;
+    })();
+
+    const waitForFetching = (async () => {
+        while (isFetching) {
+            await new Promise(res => setTimeout(res, 100));
+        }
         fetchingJob = null;
-    }
+    })();
+
+    await Promise.all([waitForPosting, waitForFetching]);
     
     // Reset
-    num_posts_available = 0;
+    num_posts_allowed = 0;
+    num_stories_posted = 0;
+    next_post_type = "story";
 }
 
-// Process available posts based on num_posts_available(number of allowed posts at the moment)
 async function processAvailablePosts() {
     try {
-        while (num_posts_available > 0) {
-            const result = await postNext();
-            
-            if (result === NO_POSTS_PENDING) {
-                console.log("No pending posts available. Will try again in next interval.");
-            } else if (result === FAILURE) {
-                console.log("Post might or might not have failed. Review manually.");
-                //break;
+        const postsToProcess = Math.min(num_posts_allowed, MAX_POSTS_IN_INTERVAL);
+        console.log(`Processing up to ${postsToProcess} posts in this interval`);
+        
+        for (let i = 0; i < postsToProcess; i++) {
+            if (i > 0) {
+                console.log(`Waiting ${POST_GAP_MINUTES} minutes before posting next item`);
+                await new Promise(resolve => setTimeout(resolve, POST_GAP_MINUTES * 60 * 1000));
             }
             
-            num_posts_available--;
+            if (next_post_type === "story" && num_stories_posted < MAX_STORIES) {
+                let result = await postNext("story");
+
+                next_post_type = "post";
+
+                if(result != NO_POSTS_PENDING){
+                    num_stories_posted++;
+                    num_posts_allowed--;
+                    return;
+                }
+            }
+            
+            let result = await postNext("post");
+            
+            
+            if (result === NO_POSTS_PENDING) {
+                if (num_stories_posted < MAX_STORIES) {
+                    result = await postNext("story");
+                    
+                    if (result === SUCCESS) {
+                        num_stories_posted++;
+                        num_posts_allowed--;
+                        next_post_type = "post";
+                    } else if (result === FAILURE) {
+                        num_posts_allowed--;
+                    } else {
+                        // No content available at all
+                        console.log("No posts or stories available. Waiting for next interval.");
+                        break;
+                    }
+                } else {
+                    console.log("No posts available and max stories reached. Waiting for next interval.");
+                    break;
+                }
+            }
+            else{
+                num_posts_allowed--;
+                next_post_type = num_stories_posted < MAX_STORIES ? "story" : "post";
+            }
         }
-    } catch (error) {
+    } 
+    catch (error) {
         console.error(`Error in processAvailablePosts: ${error}`);
     }
 }
@@ -270,7 +345,7 @@ async function postNext(type = "post") {
             );
         }
         else if(type === "story"){
-            result = await ic.postStoryToInsta(nextPost.image_url)
+            result = await ic.postStoryToInsta(nextPost.image_url);
         }
         else{
             throw new Error("Invalid upload Type passed to 'postNext'");
@@ -278,7 +353,7 @@ async function postNext(type = "post") {
 
         if(result?.success){
             await pq.markPosted(nextPost.id, type);
-            console.log(`Successfully posted photo ID: ${nextPost.id} as a ${type}`);
+            console.log(`Successfully posted ${type} ID: ${nextPost.id}`);
             return SUCCESS;
         }
         else{
@@ -375,12 +450,12 @@ async function fetchPhotosForCampaign(campaign) {
                 };
             });
             
-            // Add all photos to queue
+            //Add all photos to queue
             await pq.pushPosts(photos);
             
             skip += photos.length;
             
-            // If photos returned less than limit, there are no more photos
+            //If photos returned less than limit, there are no more photos
             if (photos.length < feedRequestSize) {
                 hasMorePhotos = false;
             }
@@ -439,11 +514,12 @@ async function createCampaignStories(campaign){
 
         //push story posts to db
         pq.pushPosts(stories, "story");
-
-        console.log(`Created stories for ${campaign.id}`);
+        if(stories.length > 0)
+            console.log(`Created stories for ${campaign.id}`);
+        else
+            console.log(`Not enough Posted photos in campaign ${campaign} for a story`);
     }
     catch(e){
-        console.log(`Error ${e} occured while trying to create stories for campaign: ${campaign}`);
+        console.log(`Error ${e} occurred while trying to create stories for campaign: ${campaign.id}`);
     }
 }
-

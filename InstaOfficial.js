@@ -63,6 +63,9 @@ class InstaService {
             console.log("Media container created");
             return response.data.id;
         } catch (error) {
+            console.error('Error response data:', error.response?.data);
+            console.error('Error response status:', error.response?.status);
+            console.error('Error message:', error.message);
             throw new Error(`Media container creation failed: ${error.response?.data?.error?.message || error.message}`);
         }
     }
